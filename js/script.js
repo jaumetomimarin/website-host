@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Función para volver al inicio
     botonTornar.addEventListener('click', function() {
+        aturarStreams();
         // Ocultar página del portal
         paginaPortal.classList.remove('pagina-activa');
         paginaPortal.classList.add('pagina-oculta');
@@ -36,7 +37,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Mostrar página principal
         paginaPrincipal.classList.remove('pagina-oculta');
         paginaPrincipal.classList.add('pagina-activa');
-        aturarStreams();
     });
 
     function iniciarStreams(){
