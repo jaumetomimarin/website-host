@@ -19,7 +19,7 @@ def generate_frames(stream_type):
                 ret, buffer = cv2.imencode('.jpg', frame)
             elif stream_type == 'virtual':
                 # Para el stream virtual, aplicamos el procesamiento
-                fg_mask = backSub.apply(frame, learningRate=0.7)
+                fg_mask = backSub.apply(frame, learningRate=0.3)
                 retval, mask_thresh = cv2.threshold(fg_mask, 120, 255, cv2.THRESH_BINARY)
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
                 mask_eroded = cv2.morphologyEx(mask_thresh, cv2.MORPH_OPEN, kernel)
