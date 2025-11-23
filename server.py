@@ -157,6 +157,10 @@ def create_cylinder_mesh(p0, p1, radius=0.05, color=[0, 1, 0]):
     return cylinder
 
 
+# Assegura't de tenir imports i variables globals iguals que abans
+HEAD_OBJ_PATH = "dummy_gorgon.obj" 
+HEAD_SCALE = 0.05 
+
 class ReconstructionProcessor(threading.Thread):
     def __init__(self, camera_front_stream, camera_side_stream, frame_lock):
         threading.Thread.__init__(self)
@@ -168,74 +172,109 @@ class ReconstructionProcessor(threading.Thread):
     def run(self):
         global latest_virtual_frame
         
-        # Inicialización de Open3D (off-screen)
         vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name="3D Reconstruction (Background)", width=1200, height=600, visible=False) 
-        opt = vis.get_render_option()
-        opt.background_color = np.array([0,0,0])
-        vis.add_geometry(o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.75).paint_uniform_color([0,0,0]))
+        vis.create_window(window_name="3D Reconstruction", width=1200, height=600, visible=False) 
+        vis.get_render_option().background_color = np.array([0,0,0])
         
-        view_control = vis.get_view_control()
-        view_control.set_zoom(0.2); view_control.set_front([0.5, 0.5, -1]); view_control.set_lookat([0, 0, 0]); view_control.set_up([-0.1, -0.9, 0.1])
+        # 1. Càmera virtual (Zoom i posició)
+        ctr = vis.get_view_control()
+        ctr.set_zoom(0.6)
+        ctr.set_lookat([0, 0, 0])
+        ctr.set_front([0, 0, -1])  # Mira des del davant
+        ctr.set_up([0, -1, 0])     # Y invertida (habitual en CV)
 
-        current_skeleton_mesh = o3d.geometry.TriangleMesh()
-        vis.add_geometry(current_skeleton_mesh)
+        # 2. Inicialització de Geometries
+        skeleton_mesh = o3d.geometry.TriangleMesh()
+        vis.add_geometry(skeleton_mesh)
+        
+        # Carreguem el cap (NOMÉS UNA VEGADA)
+        try:
+            head_base = o3d.io.read_triangle_mesh(HEAD_OBJ_PATH)
+            head_base.compute_vertex_normals()
+            head_base.paint_uniform_color([0.9, 0.8, 0.7])
+            head_base.scale(HEAD_SCALE, center=[0,0,0]) # Escalem aquí una sola vegada
+            # Si el teu OBJ mira cap enrere, descomenta això:
+            # head_base.rotate(head_base.get_rotation_matrix_from_xyz((0, np.pi, 0)), center=(0,0,0))
+        except:
+            head_base = None
+            print("No s'ha trobat head.obj")
 
-        # Inicialización de MediaPipe
+        head_active = o3d.geometry.TriangleMesh()
+        vis.add_geometry(head_active)
+
+        # Inicialització MP (igual que abans)
         mp_pose = mp.solutions.pose
-        pose_front = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, model_complexity=1)
-        pose_side = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, model_complexity=1)
+        pose_front = mp_pose.Pose(min_detection_confidence=0.5, model_complexity=1)
+        pose_side = mp_pose.Pose(min_detection_confidence=0.5, model_complexity=1)
         cam1_params, cam2_params = setup_orthogonal_cameras()
-        
-        # Bucle principal de procesamiento 3D
+
         while self.running:
-            # 1. Obtener frames de los buffers de CameraStream
             frame1 = self.camera_front_stream.get_frame() 
             frame2 = self.camera_side_stream.get_frame() 
+            if frame1 is None or frame2 is None: time.sleep(0.01); continue
 
-            if frame1 is None or frame2 is None:
-                time.sleep(0.01)
-                continue
-
-            # 2. Procesamiento de Pose 2D/3D
+            # ... (Processament MP i Triangulació igual que abans) ...
             p2d_f, p3d_mp_f, conf_f = extract_mediapipe_data(frame1, pose_front)
             p2d_s, p3d_mp_s, conf_s = extract_mediapipe_data(frame2, pose_side)
-
+            
             final_landmarks = None
+            # ... (Bloc de fusió igual que abans) ...
             if p2d_f is not None and p2d_s is not None:
                 try:
                     tri_3d = triangulate_landmarks(p2d_f, p2d_s, cam1_params, cam2_params)
-                    avg_conf = (conf_f + conf_s) / 2
-                    fused = fuse_data(p3d_mp_f, tri_3d, avg_conf)
+                    fused = fuse_data(p3d_mp_f, tri_3d, (conf_f + conf_s)/2)
                     final_landmarks = fused * AXIS_CORRECTION
-                except Exception:
-                    pass
+                except: pass
 
-            # 3. Renderizado Open3D (Actualizar el esqueleto)
+            # 3. ACTUALITZACIÓ DE GEOMETRIA
             if final_landmarks is not None:
-                vis.remove_geometry(current_skeleton_mesh, reset_bounding_box=False)
-                new_skeleton_mesh = o3d.geometry.TriangleMesh()
+                # A. ESQUELET (Igual que abans)
+                vis.remove_geometry(skeleton_mesh, reset_bounding_box=False)
+                skeleton_mesh = o3d.geometry.TriangleMesh()
                 for i, j in MEDIAPIPE_CONNECTIONS:
                     if i < len(final_landmarks) and j < len(final_landmarks):
-                        cyl = create_cylinder_mesh(final_landmarks[i], final_landmarks[j], radius=BONE_THICKNESS, color=BONE_COLOR)
-                        if cyl:
-                            new_skeleton_mesh += cyl
-                
-                current_skeleton_mesh = new_skeleton_mesh
-                vis.add_geometry(current_skeleton_mesh, reset_bounding_box=False)
+                        cyl = create_cylinder_mesh(final_landmarks[i], final_landmarks[j], BONE_THICKNESS, BONE_COLOR)
+                        if cyl: skeleton_mesh += cyl
+                vis.add_geometry(skeleton_mesh, reset_bounding_box=False)
 
-            vis.update_geometry(current_skeleton_mesh)
+                # B. CAP (SIMPLIFICAT)
+                if head_base is not None:
+                    vis.remove_geometry(head_active, reset_bounding_box=False)
+                    
+                    # Posició: Nas (Landmark 0)
+                    nose = final_landmarks[0]
+                    
+                    # Orientació Simplificada:
+                    # Vector Espatlles (Esq a Dreta)
+                    vec_x = final_landmarks[12] - final_landmarks[11] 
+                    # Vector Columna (Vertical)
+                    vec_y = final_landmarks[11] - final_landmarks[23] 
+                    
+                    # Normalitzem
+                    vec_x = vec_x / (np.linalg.norm(vec_x) + 1e-6)
+                    vec_y = vec_y / (np.linalg.norm(vec_y) + 1e-6)
+                    
+                    # Vector Endavant (Z) = Producte Vectorial (X * Y)
+                    vec_z = np.cross(vec_x, vec_y)
+                    
+                    # Creem la matriu de rotació [X, Y, Z] directament
+                    # (Assumint que el teu OBJ mira cap a +Z)
+                    R = np.column_stack((vec_x, vec_y, vec_z))
+
+                    # Apliquem al mesh
+                    head_active = head_base.clone()
+                    head_active.rotate(R, center=(0,0,0))
+                    head_active.translate(nose)
+                    
+                    vis.add_geometry(head_active, reset_bounding_box=False)
+
             vis.poll_events()
             vis.update_renderer()
             
-            # 4. Capturar el frame renderizado y compartirlo
-            frame_3d_np = np.asarray(vis.capture_screen_float_buffer(do_render=True))
-            frame_3d_bgr = (frame_3d_np * 255).astype(np.uint8)[:, :, [2, 1, 0]]
-            
-            with self.frame_lock:
-                latest_virtual_frame = frame_3d_bgr
-
-            time.sleep(1/30) # Límite a 30 FPS
+            # Captura
+            img = (np.asarray(vis.capture_screen_float_buffer(True)) * 255).astype(np.uint8)[:, :, [2, 1, 0]]
+            with self.frame_lock: latest_virtual_frame = img
+            time.sleep(1/30)
 
     def stop(self):
         self.running = False
