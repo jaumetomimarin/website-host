@@ -44,8 +44,8 @@ document.addEventListener('DOMContentLoaded', function() {
             streamReal.src = STREAM_REAL_URL;
             streamVirtual.src = STREAM_VIRTUAL_URL;
 
-            streamReal.classList.remove('error-stream');
-            streamVirtual.classList.remove('error-stream');
+            stream-real.classList.remove('error-stream');
+            stream-virtual.classList.remove('error-stream');
 
             streamsActius = true;
         }
